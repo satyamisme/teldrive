@@ -8,15 +8,24 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/divyam234/teldrive/models"
 	"github.com/divyam234/teldrive/types"
 	"github.com/divyam234/teldrive/utils"
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/tg"
+	"gorm.io/gorm"
 
 	"github.com/gin-gonic/gin"
 )
 
 type UserService struct {
+	Db *gorm.DB
+}
+
+type UserOut struct {
+	UserId   int64  `json:"userId"`
+	Name     string `json:"name"`
+	UserName string `json:"userName"`
 }
 
 func getChunk(ctx context.Context, tgClient *telegram.Client, location tg.InputFileLocationClass, offset int64, limit int) ([]byte, error) {
@@ -95,4 +104,16 @@ func (us *UserService) GetProfilePhoto(c *gin.Context) {
 		c.AbortWithError(http.StatusNotFound, err)
 		return
 	}
+}
+
+func (us *UserService) GetAllUsers(c *gin.Context) ([]UserOut, *types.AppError) {
+
+	userId := getAuthUserId(c)
+
+	var users []UserOut
+
+	us.Db.Model(&models.User{}).Where("user_id != ?", userId).Find(&users)
+
+	return users, nil
+
 }

@@ -4,8 +4,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/divyam234/teldrive/database"
-	"github.com/divyam234/teldrive/services"
 	"github.com/divyam234/teldrive/utils"
 	"github.com/divyam234/teldrive/utils/auth"
 	"github.com/gin-gonic/gin"
@@ -13,30 +11,10 @@ import (
 )
 
 func Authmiddleware(c *gin.Context) {
-	isSharedAPI := c.FullPath() == "/api/files" && c.DefaultQuery("op", "") == "shared"
-	isFileAPI := c.FullPath() == "/api/files/:fileID/:fileName"
-	isCheckFileVisibilityAPI := c.FullPath() == "/api/files/checkFileVisibility/:fileID"
 
-	if isCheckFileVisibilityAPI {
-		fileService := services.FileService{Db: database.DB, ChannelID: utils.GetConfig().ChannelID}
-		fileVisibility := fileService.CheckFileVisibility(c.DefaultQuery("fileId", c.Param("fileID")))
-		c.Set("fileVisibility", fileVisibility)
+	if c.FullPath() == "/api/files/:fileID/:fileName" && utils.GetConfig().MultiClient {
 		c.Next()
-		return
 	}
-
-	if isFileAPI || isSharedAPI {
-		fileService := services.FileService{Db: database.DB, ChannelID: utils.GetConfig().ChannelID}
-		fileVisibility := fileService.CheckFileVisibility(c.DefaultQuery("fileId", c.Param("fileID")))
-		accessFromPublic := c.DefaultQuery("accessFromPublic", "")
-
-		if (fileVisibility == "public" && accessFromPublic == "true") || (c.FullPath() == "/api/files/:fileID/:fileName" && fileVisibility == "public") {
-			c.Set("fileVisibility", fileVisibility)
-			c.Next()
-			return
-		}
-	}
-
 	cookie, err := c.Request.Cookie("user-session")
 
 	if err != nil {

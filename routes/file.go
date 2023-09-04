@@ -15,7 +15,6 @@ func addFileRoutes(rg *gin.RouterGroup) {
 	r := rg.Group("/files")
 	r.Use(Authmiddleware)
 	fileService := services.FileService{Db: database.DB, ChannelID: utils.GetConfig().ChannelID}
-	authService := services.AuthService{Db: database.DB, SessionMaxAge: 30 * 24 * 60 * 60, SessionCookieName: "user-session"}
 
 	r.GET("", func(c *gin.Context) {
 		res, err := fileService.ListFiles(c)
@@ -67,13 +66,18 @@ func addFileRoutes(rg *gin.RouterGroup) {
 	r.GET("/:fileID/:fileName", func(c *gin.Context) {
 		fileService.GetFileStream(c)
 	})
-	r.GET("/checkFileVisibility/:fileID", func(c *gin.Context) {
-		c.JSON(http.StatusOK, c.GetString("fileVisibility"))
+
+	r.GET("/share/:fileID", func(c *gin.Context) {
+		res, err := fileService.GetSharedInfoByFileId(c)
+		if err != nil {
+			c.AbortWithError(err.Code, err.Error)
+			return
+		}
+		c.JSON(http.StatusOK, res)
 	})
 
-	r.POST("/sharefile/:fileID", func(c *gin.Context) {
-		session := authService.GetSession(c)
-		token, err := fileService.ShareFile(c, session)
+	r.POST("/share/:fileID", func(c *gin.Context) {
+		token, err := fileService.HandleShare(c)
 		if err != nil {
 			c.AbortWithError(err.Code, err.Error)
 			return

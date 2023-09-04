@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -123,103 +124,39 @@ func (fs *FileService) UpdateFile(c *gin.Context) (*schemas.FileOut, *types.AppE
 	return &file, nil
 }
 
-func (fs *FileService) ShareFile(c *gin.Context, session *types.Session) (*string, *types.AppError) {
+func (fs *FileService) GetSharedInfoByFileId(c *gin.Context) ([]schemas.SharedFile, *types.AppError) {
 	fileID := c.Param("fileID")
-	var payload schemas.FileShare
+	userId := getAuthUserId(c)
 
+	var sharedInfo []schemas.SharedFile
+
+	if err := fs.Db.Model(&models.SharedFile{}).Select("teldrive.shared_files.*", "tu.*").
+		Joins("LEFT JOIN teldrive.users tu ON shared_files.shared_with = tu.user_id").
+		Where("shared_by = ?", userId).
+		Where("file_id = ?", fileID).Scan(&sharedInfo).Error; err != nil {
+		return nil, &types.AppError{Error: errors.New("share not found"), Code: http.StatusNotFound}
+	}
+
+	return sharedInfo, nil
+}
+
+func (fs *FileService) HandleShare(c *gin.Context) (*schemas.Message, *types.AppError) {
+	fileID := c.Param("fileID")
+	userId := getAuthUserId(c)
+
+	var payload schemas.SharePayload
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		return nil, &types.AppError{Error: errors.New("invalida request payload"), Code: http.StatusBadRequest}
-	}
-	query := fs.Db.Model(&models.File{}).Select("id").Where("id = ?", fileID)
-	var results []models.File
-	query.Find(&results)
-
-	if len(results) == 0 {
-		return nil, &types.AppError{Error: errors.New("this file does not exist"), Code: http.StatusInternalServerError}
+		return nil, &types.AppError{Error: errors.New("invalid request payload"), Code: http.StatusBadRequest}
 	}
 
-	tx := fs.Db.Begin()
-	defer func() {
-		if r := recover(); r != nil {
-			tx.Rollback()
-		}
-	}()
+	jsonBytes, _ := json.Marshal(payload.Users)
 
-	var fileUpdate models.File
-	fileUpdate.Visibility = payload.Visibility
-
-	if err := fs.Db.Model(&fileUpdate).Clauses(clause.Returning{}).Where("id = ?", fileID).Updates(fileUpdate).Error; err != nil {
-		return nil, &types.AppError{Error: errors.New("failed to update the file"), Code: http.StatusInternalServerError}
+	if err := fs.Db.Exec("call teldrive.handle_share_recursive(? ,? ,? ,?, ?)", userId, fileID, jsonBytes, payload.Operation, payload.Permission).Error; err != nil {
+		return nil, &types.AppError{Error: errors.New("failed to modify share"), Code: http.StatusInternalServerError}
 	}
 
-	if payload.Visibility != "public" {
-		err := fs.Db.Transaction(func(tx *gorm.DB) error {
-			var sharedFileCount int64
-			if err := tx.Model(&models.SharedFile{}).Where("file_id = ?", fileID).Count(&sharedFileCount).Error; err != nil {
-				return err
-			}
+	return &schemas.Message{Status: true, Message: "created share"}, nil
 
-			if sharedFileCount == 0 {
-				if len(payload.SharedWithUsername) != 0 {
-					var sharedFiles []models.SharedFile
-					for _, newUser := range payload.SharedWithUsername {
-						sharedFiles = append(sharedFiles, models.SharedFile{
-							FileID:             fileID,
-							SharedWithUsername: newUser,
-						})
-					}
-					if err := tx.Create(&sharedFiles).Error; err != nil {
-						return err
-					}
-				}
-			} else {
-				var existingSharedUsers []string
-				err := tx.Model(&models.SharedFile{}).Select("shared_with_username").Where("file_id = ?", fileID).Pluck("shared_with_username", &existingSharedUsers).Error
-				if err != nil {
-					return err
-				}
-
-				var newSharedUsers []string
-				var removedSharedUsers []string
-
-				for _, newUsername := range payload.SharedWithUsername {
-					if !utils.Contains(existingSharedUsers, newUsername) {
-						newSharedUsers = append(newSharedUsers, newUsername)
-					}
-				}
-				for _, existingUsername := range existingSharedUsers {
-					if !utils.Contains(payload.SharedWithUsername, existingUsername) {
-						removedSharedUsers = append(removedSharedUsers, existingUsername)
-					}
-				}
-				if len(newSharedUsers) > 0 {
-					usernamesArray := "{" + strings.Join(newSharedUsers, ",") + "}"
-					err = tx.Exec("SELECT teldrive.add_shared_users(?, ?)", fileID, usernamesArray).Error
-					if err != nil {
-						return err
-					}
-				}
-
-				if len(removedSharedUsers) > 0 {
-					usernamesArray := "{" + strings.Join(removedSharedUsers, ",") + "}"
-					err = tx.Exec("SELECT teldrive.remove_shared_users(?, ?)", fileID, usernamesArray).Error
-					if err != nil {
-						return err
-					}
-				}
-			}
-
-			return nil
-		})
-
-		if err != nil {
-			return nil, &types.AppError{Error: errors.New("failed to update shared usernames"), Code: http.StatusInternalServerError}
-		}
-	}
-
-	tx.Commit()
-
-	return &fileUpdate.Visibility, nil
 }
 
 func (fs *FileService) GetFileByID(c *gin.Context) (*schemas.FileOutFull, error) {
@@ -259,55 +196,20 @@ func (fs *FileService) ListFiles(c *gin.Context) (*schemas.FileResponse, *types.
 		return nil, &types.AppError{Error: errors.New(""), Code: http.StatusBadRequest}
 	}
 
-	fileVisibility := c.GetString("fileVisibility")
-	var userId int64
-	if !fileQuery.AccessFromPublic {
-		userId = getAuthUserId(c)
-		fileQuery.UserID = userId
-	}
+	var userId = getAuthUserId(c)
 
-	query := fs.Db.Model(&models.File{}).Limit(pagingParams.PerPage).
-		Select("teldrive.files.*, array_agg(teldrive.shared_files.shared_with_username) AS shared_with_usernames").
-		Joins("LEFT JOIN teldrive.shared_files ON teldrive.files.id = teldrive.shared_files.file_id").
-		Where(map[string]interface{}{"user_id": userId, "status": "active"}).Group("teldrive.files.id")
+	query := fs.Db.Limit(pagingParams.PerPage)
 
 	if fileQuery.Op == "shared" {
-		if fileVisibility == "public" && fileQuery.AccessFromPublic {
-			query = fs.Db.Model(&models.File{}).Limit(pagingParams.PerPage).
-				Select("teldrive.files.*").
-				Where("status = ?", "active").Where("visibility = ?", "public")
-		} else {
-			query = fs.Db.Model(&models.File{}).Limit(pagingParams.PerPage).
-				Select("teldrive.files.*").
-				Joins("INNER JOIN teldrive.shared_files sf ON teldrive.files.id = sf.file_id AND sf.shared_with_username = ?", fileQuery.SharedWithUsername).
-				Where("status = ?", "active")
-		}
+		query = fs.Db.Model(&models.SharedFile{}).
+			Joins("LEFT JOIN teldrive.files tf ON shared_files.file_id = tf.id").
+			Where("shared_with is NULL OR shared_with = ?", userId).
+			Where("status = ?", "active")
 
 		setOrderFilter(query, &pagingParams, &sortingParams)
 
 		query.Order("type DESC").Order(getOrder(sortingParams))
 
-		if fileQuery.Path == "/" {
-			query.Joins("LEFT JOIN teldrive.shared_files parent_sf ON teldrive.files.parent_id = parent_sf.file_id AND parent_sf.shared_with_username = ?", fileQuery.SharedWithUsername).
-				Where("status = ?", "active").
-				Where("parent_sf.file_id IS NULL OR parent_sf.shared_with_username IS NULL")
-		} else {
-			subQueryFile := fs.Db.Model(&models.File{}).Select("path, type").Where("id = ?", fileQuery.FileID)
-			var file models.File
-			subQueryFile.First(&file)
-
-			if file.Type == "folder" {
-				subQueryIds := fs.Db.Model(&models.File{}).Select("id").Where("path like '%' || (?)", file.Path)
-				var fileIDs []string
-				subQueryIds.Pluck("id", &fileIDs)
-
-				query.
-					Where("parent_id in (?)", fileIDs)
-			} else {
-				query.Where("teldrive.files.id = ?", fileQuery.FileID)
-			}
-
-		}
 	} else if fileQuery.Op == "list" {
 		if pathExists, message := fs.CheckIfPathExists(&fileQuery.Path); !pathExists {
 			return nil, &types.AppError{Error: errors.New(message), Code: http.StatusNotFound}
@@ -315,7 +217,8 @@ func (fs *FileService) ListFiles(c *gin.Context) (*schemas.FileResponse, *types.
 
 		setOrderFilter(query, &pagingParams, &sortingParams)
 
-		query.Order("type DESC").Order(getOrder(sortingParams)).
+		query.Model(&models.File{}).Order("type DESC").Order(getOrder(sortingParams)).
+			Where(map[string]interface{}{"user_id": userId, "status": "active"}).
 			Where("parent_id in (?)", fs.Db.Model(&models.File{}).Select("id").Where("path = ?", fileQuery.Path))
 
 	} else if fileQuery.Op == "find" {
@@ -336,72 +239,27 @@ func (fs *FileService) ListFiles(c *gin.Context) (*schemas.FileResponse, *types.
 
 		setOrderFilter(query, &pagingParams, &sortingParams)
 
-		query.Order("type DESC").Order(getOrder(sortingParams)).Where(filterQuery)
+		query.Model(&models.File{}).Order("type DESC").Order(getOrder(sortingParams)).
+			Where(map[string]interface{}{"user_id": userId, "status": "active"}).
+			Where(filterQuery)
 
 	} else if fileQuery.Op == "search" {
 
-		query.Where("teldrive.get_tsquery(?) @@ teldrive.get_tsvector(name)", fileQuery.Search)
+		query.Model(&models.File{}).Where("teldrive.get_tsquery(?) @@ teldrive.get_tsvector(name)", fileQuery.Search)
 
 		setOrderFilter(query, &pagingParams, &sortingParams)
-		query.Order(getOrder(sortingParams))
+		query.Order(getOrder(sortingParams)).
+			Where(map[string]interface{}{"user_id": userId, "status": "active"})
 
 	}
-
-	var files []models.FileWithUsernames
-
-	query.Find(&files)
 
 	var results []schemas.FileOut
 
-	for _, file := range files {
-		result := mapFileWithUsernamesToFileOut(file)
-		if file.SharedWithUsernames != "{NULL}" && file.SharedWithUsernames != "" {
-			usernames := strings.Split(strings.Trim(file.SharedWithUsernames, "{}"), ",")
-			result.SharedWithUsernames = &usernames
-		}
-
-		if fileQuery.FileID != "" {
-			subQuery := fs.Db.Model(&models.File{}).Select("path").Where("id = ?", fileQuery.FileID).Where("depth > ?", 0)
-			var files []models.File
-			subQuery.Find(&files)
-			var filePaths []string
-			if len(files) == 1 {
-				path := files[0].Path
-				paths := strings.Split(path, "/")
-				for _, path := range paths {
-					if path != "" {
-						if len(filePaths) == 0 {
-							filePaths = append(filePaths, fmt.Sprintf("/%s", path))
-						} else {
-							filePaths = append(filePaths, fmt.Sprintf("%s/%s", filePaths[len(filePaths)-1], path))
-						}
-					}
-				}
-			}
-
-			var pathIDs []schemas.PathID
-			for _, path := range filePaths {
-				if path != "" {
-					var res struct {
-						ID string
-					}
-					if err := fs.Db.Raw("SELECT id FROM teldrive.files WHERE path = ?", path).Scan(&res).Error; err != nil {
-						panic(err)
-					}
-					pathIDs = append(pathIDs, schemas.PathID{
-						Path: path,
-						ID:   res.ID,
-					})
-				}
-			}
-			if pathIDs != nil {
-				result.PathChain = &pathIDs
-			}
-		}
-
-		results = append(results, result)
+	if fileQuery.Op == "shared" {
+		query.Scan(&results)
+	} else {
+		query.Find(&results)
 	}
-
 	token := ""
 
 	if len(results) == pagingParams.PerPage {
@@ -423,12 +281,6 @@ func (fs *FileService) CheckIfPathExists(path *string) (bool, string) {
 		return false, "This directory doesn't exist."
 	}
 	return true, ""
-}
-func (fs *FileService) CheckFileVisibility(fileID string) string {
-	query := fs.Db.Model(&models.File{}).Select("visibility").Where("id = ?", fileID)
-	var result models.File
-	query.First(&result)
-	return result.Visibility
 }
 
 func (fs *FileService) MakeDirectory(c *gin.Context) (*schemas.FileOut, *types.AppError) {
@@ -621,30 +473,15 @@ func (fs *FileService) getParts(ctx context.Context, tgClient *telegram.Client, 
 
 func mapFileToFileOut(file models.File) schemas.FileOut {
 	return schemas.FileOut{
-		ID:         file.ID,
-		Name:       file.Name,
-		Type:       file.Type,
-		MimeType:   file.MimeType,
-		Path:       file.Path,
-		Size:       file.Size,
-		Starred:    file.Starred,
-		ParentID:   file.ParentID,
-		Visibility: file.Visibility,
-		UpdatedAt:  file.UpdatedAt,
-	}
-}
-func mapFileWithUsernamesToFileOut(file models.FileWithUsernames) schemas.FileOut {
-	return schemas.FileOut{
-		ID:         file.ID,
-		Name:       file.Name,
-		Type:       file.Type,
-		MimeType:   file.MimeType,
-		Path:       file.Path,
-		Size:       file.Size,
-		Starred:    file.Starred,
-		ParentID:   file.ParentID,
-		Visibility: file.Visibility,
-		UpdatedAt:  file.UpdatedAt,
+		ID:        file.ID,
+		Name:      file.Name,
+		Type:      file.Type,
+		MimeType:  file.MimeType,
+		Path:      file.Path,
+		Size:      file.Size,
+		Starred:   file.Starred,
+		ParentID:  file.ParentID,
+		UpdatedAt: file.UpdatedAt,
 	}
 }
 

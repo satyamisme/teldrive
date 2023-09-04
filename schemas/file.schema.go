@@ -49,18 +49,15 @@ type FileIn struct {
 }
 
 type FileOut struct {
-	ID                  string    `json:"id"`
-	Name                string    `json:"name"`
-	Type                string    `json:"type"`
-	MimeType            string    `json:"mimeType" mapstructure:"mime_type"`
-	Path                string    `json:"path,omitempty" mapstructure:"path,omitempty"`
-	Size                int64     `json:"size,omitempty" mapstructure:"size,omitempty"`
-	Starred             *bool     `json:"starred"`
-	ParentID            string    `json:"parentId,omitempty" mapstructure:"parent_id"`
-	Visibility          string    `json:"visibility,omitempty" mapstructure:"visibility"`
-	SharedWithUsernames *[]string `json:"sharedWithUsernames,omitempty" mapstructure:"shared_with_usernames"`
-	PathChain           *[]PathID `json:"pathChain,omitempty" mapstructure:"path_chain"`
-	UpdatedAt           time.Time `json:"updatedAt,omitempty" mapstructure:"updated_at"`
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Type      string    `json:"type"`
+	MimeType  string    `json:"mimeType" mapstructure:"mime_type"`
+	Path      string    `json:"path,omitempty" mapstructure:"path,omitempty"`
+	Size      int64     `json:"size,omitempty" mapstructure:"size,omitempty"`
+	Starred   *bool     `json:"starred"`
+	ParentID  string    `json:"parentId,omitempty" mapstructure:"parent_id"`
+	UpdatedAt time.Time `json:"updatedAt,omitempty" mapstructure:"updated_at"`
 }
 
 type FileResponse struct {
@@ -83,12 +80,27 @@ type MkDir struct {
 	Path string `json:"path"`
 }
 
-type FileShare struct {
-	Visibility         string   `json:"visibility,omitempty"`
-	SharedWithUsername []string `json:"sharedWithUsername,omitempty"`
+type SharePayloadEntry struct {
+	Permission string `json:"permission,omitempty"`
+	UserID     int64  `json:"userId"`
+	Operation  string `json:"operation"`
+}
+
+type SharePayload struct {
+	Users      []SharePayloadEntry `json:"users"`
+	Operation  string              `json:"operation"`
+	Permission string              `json:"permission,omitempty"`
 }
 
 type PathID struct {
 	Path string `json:"path,omitempty"`
 	ID   string `json:"id,omitempty"`
+}
+
+type SharedFile struct {
+	PermissionLevel string `json:"permission"`
+	SharedBy        int64  `json:"sharedBy"`
+	SharedWith      int64  `json:"sharedWith,omitempty"`
+	UserName        string `json:"sharedWithUserName,omitempty"`
+	Name            string `json:"sharedWithFullName,omitempty"`
 }
