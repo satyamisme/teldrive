@@ -17,6 +17,11 @@ jobs:
         goarch: [amd64]
     steps:
       - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+         with:
+          node-version: 18
+          cache: 'npm'
+          
       - uses: wangyoucao577/go-release-action@v1.37
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -26,6 +31,7 @@ jobs:
           extra_files: LICENSE README.md
           goversion: "https://dl.google.com/go/go1.21.1.linux-amd64.tar.gz"
           pre_command: |
+              
               make pre-ui
               make ui
           release_tag: dev
