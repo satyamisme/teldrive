@@ -22,10 +22,6 @@ jobs:
           fetch-depth: 0
           submodules: true
 
-      - uses: actions/setup-node@v3
-        with:
-          node-version: 18
-
       - uses: wangyoucao577/go-release-action@v1.37
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -35,6 +31,7 @@ jobs:
           extra_files: LICENSE README.md
           goversion: "https://dl.google.com/go/go1.21.1.linux-amd64.tar.gz"
           pre_command: |
-              make pre-ui
-              make ui
+              curl -fsSL https://bun.sh/install | bash
+              cd ui/teldrive-ui && bun install
+              cd ui/teldrive-ui && bunx --bun vite build
           release_tag: dev
