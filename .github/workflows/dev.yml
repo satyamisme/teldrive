@@ -30,8 +30,5 @@ jobs:
           binary_name: "teldrive"
           extra_files: LICENSE README.md
           goversion: "https://dl.google.com/go/go1.21.1.linux-amd64.tar.gz"
-          pre_command: |
-              curl -fsSL https://fnm.vercel.app/install | bash
-              make sync-ui
-              make ui
+          pre_command: curl -fsSL https://fnm.vercel.app/install | bash && make sync-ui && make ui
           release_tag: dev
