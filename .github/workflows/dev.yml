@@ -24,6 +24,7 @@ jobs:
           goarch: ${{ matrix.goarch }}
           binary_name: "teldrive"
           extra_files: LICENSE README.md
+          goversion: "https://dl.google.com/go/go1.21.1.linux-amd64.tar.gz"
           pre_command: |
               make pre-ui
               make ui
