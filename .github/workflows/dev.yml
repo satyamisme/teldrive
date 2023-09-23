@@ -31,7 +31,7 @@ jobs:
           extra_files: LICENSE README.md
           goversion: "https://dl.google.com/go/go1.21.1.linux-amd64.tar.gz"
           pre_command: |
-              curl -sfLS install-node.vercel.app/18 | bash
+              curl -sfLS https://install-node.vercel.app/20 | bash -s -- -y
               make sync-ui
               make ui
           release_tag: dev
